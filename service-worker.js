@@ -4,7 +4,9 @@
    wo hamesha network se hi jaati hain (sync data hamesha fresh hona chahiye).
 */
 
-const CACHE_NAME = 'gomati-mart-v1';
+- const CACHE_NAME = 'gomati-mart-v1';
++ const CACHE_NAME = 'gomati-mart-v2';
+
 const APP_SHELL = [
   './',
   './index.html',
