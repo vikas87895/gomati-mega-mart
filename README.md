@@ -1,1 +1,0 @@
-# gomati-mega-mart
