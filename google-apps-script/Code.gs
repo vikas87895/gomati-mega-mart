@@ -9,7 +9,7 @@
 */
 
 const SHEET_NAME = 'Products';
-const HEADERS = ['barcode', 'name', 'price', 'qty', 'updatedAt'];
+const HEADERS = ['barcode', 'name', 'price', 'mrp', 'qty', 'updatedAt'];
 
 function doGet(e) {
   const sheet = getSheet();
