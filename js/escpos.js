@@ -1,7 +1,7 @@
 /* escpos.js
-   WebUSB API ka use karke USB thermal printer ko seedha ESC/POS raw commands
-   bhejta hai. Zyadatar cheap USB bill printer aur QR/barcode label printer
-   ESC/POS (ya compatible) commands support karte hain.
+   WebUSB API ka use karke USB printers ko seedha commands bhejta hai.
+   - Bill Printer (RP3200 jaisa): ESC/POS commands
+   - Label Printer (LP46 jaisa): TSPL commands (barcode label ke liye)
 
    NOTE: WebUSB sirf Chrome (Android) mein kaam karta hai aur HTTPS chahiye
    (GitHub Pages HTTPS deta hai, isliye theek rahega).
@@ -10,9 +10,6 @@
 const ESC = 0x1b, GS = 0x1d;
 
 function textToBytes(str) {
-  // Basic printers Latin/ASCII hi support karte hain achhi tarah.
-  // Hindi/unicode text print karne k liye printer ka font support chahiye hoga -
-  // isliye receipt mein English/numbers use karna safest hai.
   const bytes = [];
   for (let i = 0; i < str.length; i++) {
     const code = str.charCodeAt(i);
@@ -21,9 +18,44 @@ function textToBytes(str) {
   return bytes;
 }
 
+function padRight(str, len) { str = String(str); return str.length >= len ? str.substring(0, len) : str + ' '.repeat(len - str.length); }
+function padLeft(str, len) { str = String(str); return str.length >= len ? str.substring(0, len) : ' '.repeat(len - str.length) + str; }
+
+// Bill ka total amount shabdon mein likhta hai (Indian numbering - lakh/crore)
+function numberToWordsIndian(num) {
+  num = Math.round(num);
+  if (num === 0) return 'Zero';
+  const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
+    'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+  const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+
+  function twoDigits(n) {
+    if (n < 20) return ones[n];
+    return tens[Math.floor(n / 10)] + (n % 10 ? ' ' + ones[n % 10] : '');
+  }
+  function threeDigits(n) {
+    let str = '';
+    if (n >= 100) { str += ones[Math.floor(n / 100)] + ' Hundred'; n = n % 100; if (n) str += ' '; }
+    if (n) str += twoDigits(n);
+    return str;
+  }
+
+  let crore = Math.floor(num / 10000000); num %= 10000000;
+  let lakh = Math.floor(num / 100000); num %= 100000;
+  let thousand = Math.floor(num / 1000); num %= 1000;
+  let rest = num;
+
+  const parts = [];
+  if (crore) parts.push(threeDigits(crore) + ' Crore');
+  if (lakh) parts.push(threeDigits(lakh) + ' Lakh');
+  if (thousand) parts.push(threeDigits(thousand) + ' Thousand');
+  if (rest) parts.push(threeDigits(rest));
+  return parts.join(' ');
+}
+
 class ThermalPrinter {
   constructor(storageKey) {
-    this.storageKey = storageKey; // 'billPrinterDevice' ya 'qrPrinterDevice' (identify karne k liye)
+    this.storageKey = storageKey; // 'billPrinterDevice' ya 'qrPrinterDevice'
     this.device = null;
     this.endpointOut = null;
   }
@@ -41,11 +73,8 @@ class ThermalPrinter {
       await device.selectConfiguration(1);
     }
 
-    // TVS RP3200 / LP46 jaise printers mein aksar ek se zyada interfaces hote hain
-    // (printer class + kabhi kabhi ek extra vendor interface). Pehla wala hamesha
-    // claim nahi hota (kabhi kabhi OS/dusri service usse pakde baithi hoti hai),
-    // isliye har OUT-endpoint wale interface ko try karte hain jab tak ek claim
-    // na ho jaye.
+    // Kayi printers mein ek se zyada interfaces hote hain - jo pehla claim ho
+    // jaaye wahi use karte hain.
     const candidates = [];
     for (const config of device.configurations || [device.configuration]) {
       for (const iface of config.interfaces) {
@@ -59,7 +88,7 @@ class ThermalPrinter {
     }
 
     if (candidates.length === 0) {
-      throw new Error('Printer ka USB OUT endpoint nahi mila. Ye device print karne layak nahi lag raha - USB cable/port badal ke dekhein.');
+      throw new Error('Printer ka USB OUT endpoint nahi mila. USB cable/port badal ke dekhein.');
     }
 
     const attemptErrors = [];
@@ -80,7 +109,7 @@ class ThermalPrinter {
         attemptErrors.join('\n') + '\n\n' +
         'Ye try karein:\n' +
         '1. Printer ko USB cable se nikaal ke dobara lagayein\n' +
-        '2. Phone ki koi bhi "Printer" ya "USB" app band karein jo background mein chal rahi ho\n' +
+        '2. Phone ki koi bhi "Printer" ya "USB" app band karein\n' +
         '3. Chrome ko poori tarah band karke dobara kholein\n' +
         '4. Phone restart karke ek baar try karein'
       );
@@ -93,7 +122,7 @@ class ThermalPrinter {
 
   async reconnectSaved() {
     if (!navigator.usb) return false;
-    const devices = await navigator.usb.getDevices(); // pehle se paired devices (permission diya hua)
+    const devices = await navigator.usb.getDevices();
     const savedId = localStorage.getItem(this.storageKey);
     if (!savedId) return false;
     const found = devices.find(d => (d.vendorId + ':' + d.productId) === savedId);
@@ -117,73 +146,95 @@ class ThermalPrinter {
     await this.device.transferOut(this.endpointOut, data);
   }
 
-  // ---- High level receipt commands ----
+  // ---- BILL PRINTER (ESC/POS) ----
+  // shop: {name, address, phone, gstin}
+  // customer: {name, mobile}
+  // items: [{ name, qty, price, mrp }]
+  async printBill(shop, customer, billNo, items) {
+    const subtotal = items.reduce((s, it) => s + it.qty * it.price, 0);
+    const totalMRP = items.reduce((s, it) => s + it.qty * (it.mrp || it.price), 0);
+    const savings = totalMRP - subtotal;
+    const itemQty = items.reduce((s, it) => s + it.qty, 0);
+    const grandTotal = Math.round(subtotal);
+    const roundOff = grandTotal - subtotal;
 
-  async printBill(shop, items, total, footer) {
+    const now = new Date();
     let cmds = [];
     cmds.push(ESC, 0x40); // init
-    cmds.push(ESC, 0x61, 1); // center align
-    if (shop.name) cmds = cmds.concat(textToBytes(shop.name + '\n'));
+
+    cmds.push(ESC, 0x61, 1); // center
+    if (shop.gstin) cmds = cmds.concat(textToBytes(shop.gstin + '\n'));
+    cmds.push(ESC, 0x45, 1);
+    cmds = cmds.concat(textToBytes((shop.name || '') + '\n'));
+    cmds.push(ESC, 0x45, 0);
     if (shop.address) cmds = cmds.concat(textToBytes(shop.address + '\n'));
     if (shop.phone) cmds = cmds.concat(textToBytes('Ph: ' + shop.phone + '\n'));
     cmds = cmds.concat(textToBytes('--------------------------------\n'));
-    cmds.push(ESC, 0x61, 0); // left align
-    items.forEach(it => {
-      const line1 = it.name.substring(0, 32);
-      const qtyPrice = `${it.qty} x Rs${it.price.toFixed(2)}`;
-      const amount = (it.qty * it.price).toFixed(2);
-      const line2 = padRight(qtyPrice, 20) + padLeft('Rs' + amount, 12);
-      cmds = cmds.concat(textToBytes(line1 + '\n'));
-      cmds = cmds.concat(textToBytes(line2 + '\n'));
+
+    cmds.push(ESC, 0x61, 0); // left
+    cmds = cmds.concat(textToBytes('Customer: ' + (customer.name || 'Cash') + '\n'));
+    if (customer.mobile) cmds = cmds.concat(textToBytes('Mobile: ' + customer.mobile + '\n'));
+    cmds = cmds.concat(textToBytes(`Bill No: ${billNo}   Date: ${now.toLocaleDateString('en-IN')}\n`));
+    cmds = cmds.concat(textToBytes(`Time: ${now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}\n`));
+    cmds = cmds.concat(textToBytes('--------------------------------\n'));
+
+    items.forEach((it, i) => {
+      const nameLine = `${i + 1}. ${it.name}`.substring(0, 32);
+      cmds = cmds.concat(textToBytes(nameLine + '\n'));
+      const mrp = Number(it.mrp || it.price).toFixed(2);
+      const rate = Number(it.price).toFixed(2);
+      const amt = (it.qty * it.price).toFixed(2);
+      const detailLine = `Qty:${it.qty} MRP:${mrp} Rate:${rate}`;
+      cmds = cmds.concat(textToBytes(padRight(detailLine, 24) + padLeft(amt, 8) + '\n'));
     });
+
     cmds = cmds.concat(textToBytes('--------------------------------\n'));
-    cmds.push(ESC, 0x45, 1); // bold on
-    cmds = cmds.concat(textToBytes(padRight('TOTAL', 20) + padLeft('Rs' + total.toFixed(2), 12) + '\n'));
-    cmds.push(ESC, 0x45, 0); // bold off
+    cmds = cmds.concat(textToBytes(padRight('Item Qty:', 20) + padLeft(String(itemQty), 12) + '\n'));
+    cmds = cmds.concat(textToBytes(padRight('Total MRP Value:', 20) + padLeft(totalMRP.toFixed(2), 12) + '\n'));
+    cmds = cmds.concat(textToBytes(padRight('Your Savings:', 20) + padLeft(savings.toFixed(2), 12) + '\n'));
+    cmds = cmds.concat(textToBytes(padRight('Sub Total:', 20) + padLeft(subtotal.toFixed(2), 12) + '\n'));
+    cmds = cmds.concat(textToBytes(padRight('Round off:', 20) + padLeft(roundOff.toFixed(2), 12) + '\n'));
+    cmds.push(ESC, 0x45, 1);
+    cmds = cmds.concat(textToBytes(padRight('G. TOTAL:', 20) + padLeft(grandTotal.toFixed(2), 12) + '\n'));
+    cmds.push(ESC, 0x45, 0);
     cmds = cmds.concat(textToBytes('--------------------------------\n'));
-    cmds.push(ESC, 0x61, 1);
-    cmds = cmds.concat(textToBytes((footer || 'Dhanyavaad! Fir aaiyega.') + '\n'));
-    const now = new Date();
-    cmds = cmds.concat(textToBytes(now.toLocaleString('en-IN') + '\n'));
+    cmds = cmds.concat(textToBytes('Rs ' + numberToWordsIndian(grandTotal) + ' only\n'));
+    cmds = cmds.concat(textToBytes('--------------------------------\n'));
+    cmds = cmds.concat(textToBytes('Goods once sold will not be taken\nback & no cash refund\n'));
+
+    cmds.push(ESC, 0x61, 1); // center
+    cmds = cmds.concat(textToBytes('\nFor ' + (shop.name || '') + '\n'));
     cmds.push(0x0a, 0x0a, 0x0a);
     cmds.push(GS, 0x56, 0x41, 0x10); // partial cut
     await this.send(cmds);
+
+    return grandTotal;
   }
 
-  // Printer ke andar hi QR code generate + print karwata hai (GS ( k command,
-  // ye zyadatar ESC/POS thermal printers mein QR support ke liye standard hai)
+  // ---- LABEL PRINTER (TSPL) ----
+  // Barcode label: Shop name, MRP, product name, barcode (jaise purane "KAJU" sticker mein tha)
+  // Label size: 50mm x 25mm (agar tumhara label size alag ho to SIZE/GAP line badal dena)
   async printQRLabel(product) {
-    const data = `${product.name}|Rs${product.price}`;
-    let cmds = [];
-    cmds.push(ESC, 0x40);
-    cmds.push(ESC, 0x61, 1); // center
+    const shopName = (await DB.getMeta('shopName')) || '';
+    const cleanName = String(product.name).replace(/["\r\n]/g, '').substring(0, 24);
+    const mrp = Number(product.mrp || product.price).toFixed(2);
+    const barcodeValue = String(product.barcode).replace(/["\r\n]/g, '');
 
-    // QR: model select
-    cmds.push(GS, 0x28, 0x6b, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00);
-    // QR: size (module size 6)
-    cmds.push(GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x43, 0x06);
-    // QR: error correction level (48 = L)
-    cmds.push(GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x45, 0x31);
-    // QR: store data
-    const dataBytes = textToBytes(data);
-    const len = dataBytes.length + 3;
-    const pL = len & 0xff, pH = (len >> 8) & 0xff;
-    cmds.push(GS, 0x28, 0x6b, pL, pH, 0x31, 0x50, 0x30, ...dataBytes);
-    // QR: print
-    cmds.push(GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x51, 0x30);
+    const tspl =
+      'SIZE 50 mm, 25 mm\r\n' +
+      'GAP 2 mm, 0 mm\r\n' +
+      'DIRECTION 0\r\n' +
+      'REFERENCE 0,0\r\n' +
+      'CLS\r\n' +
+      `TEXT 20,8,"2",0,1,1,"${shopName.substring(0, 22)}"\r\n` +
+      `TEXT 20,35,"2",0,1,1,"MRP: ${mrp}"\r\n` +
+      `TEXT 20,60,"2",0,1,1,"${cleanName}"\r\n` +
+      `BARCODE 20,90,"128",50,1,0,2,4,"${barcodeValue}"\r\n` +
+      'PRINT 1,1\r\n';
 
-    cmds = cmds.concat(textToBytes('\n' + product.name.substring(0, 32) + '\n'));
-    cmds.push(ESC, 0x45, 1);
-    cmds = cmds.concat(textToBytes('Rs ' + Number(product.price).toFixed(2) + '\n'));
-    cmds.push(ESC, 0x45, 0);
-    cmds.push(0x0a, 0x0a);
-    cmds.push(GS, 0x56, 0x41, 0x10);
-    await this.send(cmds);
+    await this.send(textToBytes(tspl));
   }
 }
-
-function padRight(str, len) { str = String(str); return str.length >= len ? str.substring(0, len) : str + ' '.repeat(len - str.length); }
-function padLeft(str, len) { str = String(str); return str.length >= len ? str.substring(0, len) : ' '.repeat(len - str.length) + str; }
 
 const BillPrinter = new ThermalPrinter('billPrinterDevice');
 const QRPrinter = new ThermalPrinter('qrPrinterDevice');
