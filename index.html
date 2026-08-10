@@ -29,6 +29,11 @@
   <section id="screen-billing">
     <div id="scanMsg" class="scan-msg"></div>
 
+    <div class="inline-form">
+      <input type="text" id="customerName" placeholder="Customer naam (optional)" data-scanner-ignore="true">
+      <input type="text" id="customerMobile" placeholder="Mobile (optional)" data-scanner-ignore="true">
+    </div>
+
     <form id="manualAddForm" class="inline-form">
       <input type="text" id="manualName" placeholder="Product naam (jaise: Aalu 1kg)" required data-scanner-ignore="true">
       <input type="number" id="manualPrice" placeholder="Rate (₹)" step="0.01" min="0" required data-scanner-ignore="true">
@@ -60,7 +65,10 @@
       </div>
       <input type="text" id="pName" placeholder="Product naam" required data-scanner-ignore="true">
       <div class="form-row">
-        <input type="number" id="pPrice" placeholder="Price (₹)" step="0.01" min="0" required data-scanner-ignore="true">
+        <input type="number" id="pPrice" placeholder="Selling Rate (₹)" step="0.01" min="0" required data-scanner-ignore="true">
+        <input type="number" id="pMrp" placeholder="MRP (₹) - blank = Rate jaisa" step="0.01" min="0" data-scanner-ignore="true">
+      </div>
+      <div class="form-row">
         <input type="number" id="pQty" placeholder="Stock qty (optional)" step="any" data-scanner-ignore="true">
       </div>
       <div class="form-row">
@@ -86,6 +94,8 @@
       <input type="text" id="shopName" placeholder="Dukaan ka naam" data-scanner-ignore="true">
       <input type="text" id="shopAddress" placeholder="Address" data-scanner-ignore="true">
       <input type="text" id="shopPhone" placeholder="Phone number" data-scanner-ignore="true">
+      <input type="text" id="gstin" placeholder="GSTIN (optional)" data-scanner-ignore="true">
+      <input type="number" id="startingBillNo" placeholder="Bill number kahan se shuru ho (jaise 2613)" data-scanner-ignore="true">
 
       <h3>Sync (Google Sheet)</h3>
       <input type="text" id="scriptUrl" placeholder="Google Apps Script Web App URL" data-scanner-ignore="true">
