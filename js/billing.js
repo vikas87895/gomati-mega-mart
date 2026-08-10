@@ -1,7 +1,7 @@
 /* billing.js - Bill banane ki screen */
 
 const Billing = {
-  cart: [], // { barcode, name, price, qty }
+  cart: [], // { barcode, name, price, mrp, qty }
 
   init() {
     Scanner.init((code) => this.addByBarcode(code));
@@ -11,7 +11,7 @@ const Billing = {
       const price = parseFloat(document.getElementById('manualPrice').value);
       const qty = parseFloat(document.getElementById('manualQty').value) || 1;
       if (!name || isNaN(price)) return;
-      this.addLine({ barcode: '', name, price, qty });
+      this.addLine({ barcode: '', name, price, mrp: price, qty });
       e.target.reset();
       document.getElementById('manualName').focus();
     });
@@ -26,12 +26,11 @@ const Billing = {
       this.showScanMsg(`Barcode "${code}" mila nahi. Pehle Products screen se add karein, ya manually neeche add karein.`, true);
       return;
     }
-    this.addLine({ barcode: product.barcode, name: product.name, price: product.price, qty: 1 });
+    this.addLine({ barcode: product.barcode, name: product.name, price: product.price, mrp: product.mrp || product.price, qty: 1 });
     this.showScanMsg(`✓ ${product.name} add hua`, false);
   },
 
   addLine(line) {
-    // Agar same barcode (aur barcode khali nahi hai) pehle se cart mein hai, qty badhao
     if (line.barcode) {
       const existing = this.cart.find(c => c.barcode === line.barcode);
       if (existing) { existing.qty += line.qty; this.render(); return; }
@@ -49,7 +48,12 @@ const Billing = {
     this.render();
   },
 
-  clearCart() { this.cart = []; this.render(); },
+  clearCart() {
+    this.cart = [];
+    document.getElementById('customerName').value = '';
+    document.getElementById('customerMobile').value = '';
+    this.render();
+  },
 
   getTotal() { return this.cart.reduce((sum, c) => sum + c.qty * c.price, 0); },
 
@@ -85,20 +89,33 @@ const Billing = {
     document.getElementById('billTotal').textContent = '₹' + this.getTotal().toFixed(2);
   },
 
+  async getNextBillNo() {
+    let n = await DB.getMeta('nextBillNo');
+    if (!n) {
+      const starting = await DB.getMeta('startingBillNo');
+      n = starting ? parseInt(starting, 10) : 1;
+    }
+    await DB.setMeta('nextBillNo', n + 1);
+    return n;
+  },
+
   async printBill() {
     if (this.cart.length === 0) { alert('Cart khali hai'); return; }
     const shop = {
-      name: await DB.getMeta('shopName') || 'Gomati Mega Mart',
-      address: await DB.getMeta('shopAddress') || '',
-      phone: await DB.getMeta('shopPhone') || ''
+      name: (await DB.getMeta('shopName')) || 'Gomati Mega Mart',
+      address: (await DB.getMeta('shopAddress')) || '',
+      phone: (await DB.getMeta('shopPhone')) || '',
+      gstin: (await DB.getMeta('gstin')) || ''
     };
-    const total = this.getTotal();
+    const customer = {
+      name: document.getElementById('customerName').value.trim(),
+      mobile: document.getElementById('customerMobile').value.trim()
+    };
+
     try {
-      await BillPrinter.send([]); // connection check trigger karne ke liye (no-op agar connected h)
-    } catch (e) { /* ignore, printBill khud connect karega */ }
-    try {
-      await BillPrinter.printBill(shop, this.cart, total);
-      await DB.addSale({ items: this.cart, total });
+      const billNo = await this.getNextBillNo();
+      await BillPrinter.printBill(shop, customer, billNo, this.cart);
+      await DB.addSale({ billNo, customer, items: this.cart, total: this.getTotal() });
       this.clearCart();
     } catch (err) {
       alert('Print nahi ho paya: ' + err.message + '\n\nSettings screen mein ja kar "Bill Printer Pair Karein" try karein.');
