@@ -14,6 +14,8 @@ const Settings = {
     document.getElementById('shopName').value = (await DB.getMeta('shopName')) || 'Gomati Mega Mart';
     document.getElementById('shopAddress').value = (await DB.getMeta('shopAddress')) || 'Azad Nagar, Hisar';
     document.getElementById('shopPhone').value = (await DB.getMeta('shopPhone')) || '';
+    document.getElementById('gstin').value = (await DB.getMeta('gstin')) || '';
+    document.getElementById('startingBillNo').value = (await DB.getMeta('startingBillNo')) || '';
     document.getElementById('scriptUrl').value = (await DB.getMeta('scriptUrl')) || '';
   },
 
@@ -22,6 +24,9 @@ const Settings = {
     await DB.setMeta('shopName', document.getElementById('shopName').value.trim());
     await DB.setMeta('shopAddress', document.getElementById('shopAddress').value.trim());
     await DB.setMeta('shopPhone', document.getElementById('shopPhone').value.trim());
+    await DB.setMeta('gstin', document.getElementById('gstin').value.trim());
+    const startingBillNo = document.getElementById('startingBillNo').value.trim();
+    if (startingBillNo) await DB.setMeta('startingBillNo', startingBillNo);
     await DB.setMeta('scriptUrl', document.getElementById('scriptUrl').value.trim());
     document.getElementById('settingsMsg').textContent = '✓ Settings save ho gayi';
     setTimeout(() => document.getElementById('settingsMsg').textContent = '', 2500);
