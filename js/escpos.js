@@ -40,26 +40,55 @@ class ThermalPrinter {
     if (device.configuration === null) {
       await device.selectConfiguration(1);
     }
-    // Printer class interface dhoondo (aam taur pe printer class 0x07 hoti hai,
-    // lekin kayi cheap printers vendor-specific class use karte hain, isliye
-    // pehla available interface try karte hain jisme OUT endpoint ho).
-    let chosenInterface = null, chosenEndpoint = null;
+
+    // TVS RP3200 / LP46 jaise printers mein aksar ek se zyada interfaces hote hain
+    // (printer class + kabhi kabhi ek extra vendor interface). Pehla wala hamesha
+    // claim nahi hota (kabhi kabhi OS/dusri service usse pakde baithi hoti hai),
+    // isliye har OUT-endpoint wale interface ko try karte hain jab tak ek claim
+    // na ho jaye.
+    const candidates = [];
     for (const config of device.configurations || [device.configuration]) {
       for (const iface of config.interfaces) {
         for (const alt of iface.alternates) {
           const outEp = alt.endpoints.find(ep => ep.direction === 'out');
-          if (outEp) { chosenInterface = iface.interfaceNumber; chosenEndpoint = outEp.endpointNumber; break; }
+          if (outEp) {
+            candidates.push({ interfaceNumber: iface.interfaceNumber, endpointNumber: outEp.endpointNumber });
+          }
         }
-        if (chosenInterface !== null) break;
       }
-      if (chosenInterface !== null) break;
     }
-    if (chosenInterface === null) throw new Error('Printer ka USB OUT endpoint nahi mila.');
-    try { await device.claimInterface(chosenInterface); }
-    catch (err) { throw new Error('Printer interface claim nahi ho paya. Doosri app (jaise printer driver app) band karke dobara try karein.'); }
+
+    if (candidates.length === 0) {
+      throw new Error('Printer ka USB OUT endpoint nahi mila. Ye device print karne layak nahi lag raha - USB cable/port badal ke dekhein.');
+    }
+
+    const attemptErrors = [];
+    let claimed = null;
+    for (const c of candidates) {
+      try {
+        await device.claimInterface(c.interfaceNumber);
+        claimed = c;
+        break;
+      } catch (err) {
+        attemptErrors.push(`Interface ${c.interfaceNumber}: ${err.message}`);
+      }
+    }
+
+    if (!claimed) {
+      throw new Error(
+        'Printer se connect nahi ho paya (' + candidates.length + ' interface try kiye, sab fail).\n' +
+        attemptErrors.join('\n') + '\n\n' +
+        'Ye try karein:\n' +
+        '1. Printer ko USB cable se nikaal ke dobara lagayein\n' +
+        '2. Phone ki koi bhi "Printer" ya "USB" app band karein jo background mein chal rahi ho\n' +
+        '3. Chrome ko poori tarah band karke dobara kholein\n' +
+        '4. Phone restart karke ek baar try karein'
+      );
+    }
+
     this.device = device;
-    this.interfaceNumber = chosenInterface;
-    this.endpointOut = chosenEndpoint;
+    this.interfaceNumber = claimed.interfaceNumber;
+    this.endpointOut = claimed.endpointNumber;
   }
 
   async reconnectSaved() {
