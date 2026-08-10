@@ -1,4 +1,4 @@
-/* products.js - Product master data screen (add/edit + QR label print) */
+/* products.js - Product master data screen (add/edit + barcode label print) */
 
 const Products = {
   editingBarcode: null,
@@ -16,8 +16,6 @@ const Products = {
     this.showFormMsg('Ab barcode scan karein...');
   },
 
-  // Scanner ka global callback billing.js mein set hai; is screen pe hone par
-  // hum use products form ke liye bhi intercept karte hain
   handleScanForForm(code) {
     if (this._captureNextScan) {
       document.getElementById('pBarcode').value = code;
@@ -38,11 +36,13 @@ const Products = {
     const barcode = document.getElementById('pBarcode').value.trim();
     const name = document.getElementById('pName').value.trim();
     const price = parseFloat(document.getElementById('pPrice').value);
+    const mrpRaw = document.getElementById('pMrp').value;
+    const mrp = mrpRaw === '' ? price : parseFloat(mrpRaw);
     const qtyRaw = document.getElementById('pQty').value;
     const qty = qtyRaw === '' ? null : parseFloat(qtyRaw);
     if (!barcode || !name || isNaN(price)) { alert('Barcode, Name aur Price zaroori hain'); return; }
 
-    await DB.saveProduct({ barcode, name, price, qty, updatedAt: Date.now() }, true);
+    await DB.saveProduct({ barcode, name, price, mrp, qty, updatedAt: Date.now() }, true);
     this.resetForm();
     this.renderList(document.getElementById('searchProducts').value);
     this.showFormMsg('✓ Product save ho gaya (jab internet aayega, dusre devices pe apne aap chala jayega)');
@@ -61,6 +61,7 @@ const Products = {
     document.getElementById('pBarcode').value = p.barcode;
     document.getElementById('pName').value = p.name;
     document.getElementById('pPrice').value = p.price;
+    document.getElementById('pMrp').value = (p.mrp === undefined || p.mrp === null) ? '' : p.mrp;
     document.getElementById('pQty').value = p.qty === null || p.qty === undefined ? '' : p.qty;
     this.editingBarcode = barcode;
     window.scrollTo(0, 0);
@@ -77,8 +78,9 @@ const Products = {
     if (!p) return;
     try {
       await QRPrinter.printQRLabel(p);
+      this.showFormMsg('✓ Label printer ko command bhej di gayi (barcode: ' + p.barcode + ')');
     } catch (err) {
-      alert('QR print nahi ho paya: ' + err.message + '\n\nSettings screen mein ja kar "QR Printer Pair Karein" try karein.');
+      alert('Label print nahi ho paya: ' + err.message + '\n\nSettings screen mein ja kar "QR Label Printer Pair Karein" try karein.');
     }
   },
 
@@ -100,7 +102,7 @@ const Products = {
         <td>${p.qty === null || p.qty === undefined ? '-' : p.qty}</td>
         <td class="actions">
           <button data-action="edit" data-bc="${p.barcode}">Edit</button>
-          <button data-action="qr" data-bc="${p.barcode}">QR Print</button>
+          <button data-action="qr" data-bc="${p.barcode}">Label Print</button>
           <button data-action="del" data-bc="${p.barcode}" class="btn-danger">Delete</button>
         </td>
       `;
